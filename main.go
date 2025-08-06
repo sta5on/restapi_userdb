@@ -2,6 +2,8 @@ package main
 
 import (
 	"github.com/labstack/echo/v4"
+	"gorm.io/driver/postgres"
+	"gorm.io/gorm"
 	"log"
 	"net/http"
 	"strconv"
@@ -18,16 +20,32 @@ type Response struct {
 	Message string `json:"message"`
 }
 
-var users = make(map[int]User)
-var nextID int = 1
+var db *gorm.DB
+
+func initDB() {
+	dsn := "host=localhost user=postgres password=password dbname=postgres port=5432 sslmode=disable"
+	var err error
+	db, err = gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	if err != nil {
+		log.Fatalf("Cannot connect to db: %v", err)
+	}
+	db.AutoMigrate(&User{})
+}
+
+// main gorm methods, find, create, update, delete
 
 func getHandler(c echo.Context) error {
-	var usersSlice []User
+	var users []User
 
-	for _, msg := range users {
-		usersSlice = append(usersSlice, msg)
+	if err := db.Find(&users).Error; err != nil {
+		log.Println(err)
+		return c.JSON(http.StatusBadRequest, Response{
+			Status:  "Error",
+			Message: "Couldnt find users",
+		})
 	}
-	return c.JSON(http.StatusOK, &usersSlice)
+
+	return c.JSON(http.StatusOK, &users)
 }
 
 func postHandler(c echo.Context) error {
@@ -36,14 +54,18 @@ func postHandler(c echo.Context) error {
 		log.Println(err)
 		return c.JSON(http.StatusBadRequest, Response{
 			Status:  "Error",
+			Message: "Couldnt add the user",
+		})
+	}
+
+	if err := db.Create(&user).Error; err != nil {
+		log.Println(err)
+		return c.JSON(http.StatusBadRequest, Response{
+			Status:  "Error",
 			Message: "Couldnt create user",
 		})
 	}
 
-	user.Id = nextID
-	nextID++
-
-	users[user.Id] = user
 	return c.JSON(http.StatusOK, Response{
 		Status:  "Succes",
 		Message: "User was successfully created",
@@ -62,23 +84,21 @@ func patchHandler(c echo.Context) error {
 	}
 
 	var updatedUser User
-	if err := c.Bind(&updatedUser); err != nil {
+	if err = c.Bind(&updatedUser); err != nil {
 		log.Println(err)
 		return c.JSON(http.StatusBadRequest, Response{
 			Status:  "Error",
-			Message: "Couldnt update message",
+			Message: "Invalid input",
 		})
 	}
 
-	if _, exist := users[id]; !exist {
-		return c.JSON(http.StatusNotFound, Response{
+	if err = db.Model(&User{}).Where("id = ?", id).Update("name", updatedUser.Name).Error; err != nil {
+		log.Println(err)
+		return c.JSON(http.StatusBadRequest, Response{
 			Status:  "Error",
-			Message: "Couldnt find the message",
+			Message: "Couldnt update user",
 		})
 	}
-
-	updatedUser.Id = id
-	users[id] = updatedUser
 
 	return c.JSON(http.StatusOK, Response{
 		Status:  "Success",
@@ -96,14 +116,14 @@ func deleteHandler(c echo.Context) error {
 		})
 	}
 
-	if _, exist := users[id]; !exist {
-		return c.JSON(http.StatusNotFound, Response{
+	if err = db.Delete(&User{}, id).Error; err != nil {
+		log.Println(err)
+		return c.JSON(http.StatusBadRequest, Response{
 			Status:  "Error",
-			Message: "Couldnt find the user",
+			Message: "Couldnt delete user",
 		})
 	}
 
-	delete(users, id)
 	return c.JSON(http.StatusOK, Response{
 		Status:  "Success",
 		Message: "User was successfully deleted",
@@ -111,14 +131,15 @@ func deleteHandler(c echo.Context) error {
 }
 
 func main() {
+	initDB()
 	e := echo.New()
 
 	log.Println("app is running")
 
-	e.GET("/users", getHandler)
-	e.POST("/users", postHandler)
-	e.PATCH("/users/:id", patchHandler)
-	e.DELETE("/users/:id", deleteHandler)
+	e.GET("/v1/users", getHandler)
+	e.POST("/v1/users", postHandler)
+	e.PATCH("/v1/users/:id", patchHandler)
+	e.DELETE("/v1/users/:id", deleteHandler)
 
 	e.Start(":8080")
 }
